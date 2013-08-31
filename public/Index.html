@@ -17,6 +17,11 @@ var optionalRtpDataChannels = {
 
 var offerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels),
     answerer, answererDataChannel;
+	
+offerer.ondatachannel = function(event){ 
+dataChannel = event.channel; 
+dataChannel.onmessage = dcMessage; 
+}
 
 var offererDataChannel = offerer.createDataChannel('RTCDataChannel', {
     reliable: false
@@ -25,25 +30,26 @@ setChannelEvents(offererDataChannel, 'offerer');
 
 offerer.onicecandidate = function (event) {
     if (!event || !event.candidate) return;
-    answerer && answerer.addIceCandidate(event.candidate);
+		socket.emit('offericecandidate', {id:'', candidate:event.candidate});
+    //answerer && answerer.addIceCandidate(event.candidate);
 };
 
 var mediaConstraints = {
     optional: [],
     mandatory: {
-        OfferToReceiveAudio: false, // Hmm!!
-        OfferToReceiveVideo: false // Hmm!!
+        OfferToReceiveAudio: false,
+        OfferToReceiveVideo: false 
     }
 };
 
-offerer.createOffer(recieveSDP, null, mediaConstraints);
+//offerer.createOffer(recieveSDP, null, mediaConstraints);
 
 function recieveSDP(sessionDescription) {
     offerer.setLocalDescription(sessionDescription);
     createAnswer(sessionDescription);
 }
 
-function createAnswer(offerSDP) {
+function createAnswer(offerSDP,id) {
     answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
     answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
         reliable: false
@@ -53,23 +59,41 @@ function createAnswer(offerSDP) {
 
     answerer.onicecandidate = function (event) {
         if (!event || !event.candidate) return;
-        offerer && offerer.addIceCandidate(event.candidate);
+		socket.emit('answericecandidate', {id:id, candidate:event.candidate});
+        //offerer && offerer.addIceCandidate(event.candidate);
     };
 
-    answerer.setRemoteDescription(offerSDP);
+    answerer.setRemoteDescription(new RTCSessionDescription(offerSDP));
+	
+	console.log('recieved SDP sending reply');
+	
     answerer.createAnswer(function (sessionDescription) {
         answerer.setLocalDescription(sessionDescription);
-        offerer.setRemoteDescription(sessionDescription);
+		socket.emit('connect', {id:id, sdp:sessionDescription});
     }, null, mediaConstraints);
 }
 
 function setChannelEvents(channel, channelNameForConsoleOutput) {
     channel.onmessage = function (event) {
         console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
+		
+		var obj = JSON.parse(event.data);
+		
+		switch (obj.type)
+		{
+			case 'getchunk':
+				var start = obj.start;
+				var end = obj.end;
+				var id = obj.id;
+				sendChunk(start,end,channel,id);
+			break;
+				
+		}
     };
 
     channel.onopen = function () {
-        channel.send('first text message over RTP data ports');
+		var payload = {type:'hello', data:'first text message over RTP data ports'};
+        channel.send(JSON.stringify(payload));
     };
     channel.onclose = function (e) {
         console.error(e);
@@ -78,24 +102,319 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
         console.error(e);
     };
 }
+
+function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, filesize) {
+	start = 0;
+	end = filesize;
+	var chunkarray = new ArrayBuffer(filesize);
+
+    channel.onmessage = function (event) {
+        console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
+		
+		var obj = JSON.parse(event.data);
+		
+		switch (obj.type)
+		{
+			case 'chunk':
+				var bin = Base64Binary.decodeArrayBuffer(obj.data);
+				var trimmed = bin.slice(0,obj.size);
+				var name = obj.id;
+				
+				window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
+				  // Capture current iteration's file in local scope for the getFile() callback.
+				  
+					fs.root.getFile(name, {create: true, exclusive: true}, function(fileEntry) {
+					
+						fileEntry.createWriter(function(fileWriter) {
+							fileWriter.write(trimmed); // Note: write() can take a File or Blob object.
+							onInitFs(fs);
+						}, errorHandler);
+					  
+					}, errorHandler);
+						
+				}, errorHandler);
+
+			
+			break;
+				
+		}
+    };
+
+    channel.onopen = function () {
+		
+	
+		var payload = {
+			type:'getchunk',
+			start:start,
+			end:end,
+			id:id
+		};
+		
+        channel.send(JSON.stringify(payload));
+    };
+}
 </script>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
   var socket = io.connect('http://localhost:3000/');
-  socket.on('news', function (data) {
-    console.log(data);
-    socket.emit('register', { my: 'data' });
-	/*TODO: Register the files that you want to download*/
+  
+	function createFile(file,callback)
+	{
+		socket.emit('newfile', { filename: file.name });
+		socket.on('filecreated', function (data) {
+			console.log(data);	
+			callback(file, data.id);
+			
+		/*TODO: Serve the section of the file to another user
+		Recieve an SDP*/
+		});
+	}
+	
+	function getFile(id)
+	{
+		offerer.createOffer(
+			function (sessionDescription) {
+				offerer.setLocalDescription(sessionDescription);
+				socket.emit('getchunk', {id:id, sdp:sessionDescription});
+			}, 
+			null, mediaConstraints);
+	}
 	
 	socket.on('get', function (data) {
 		console.log(data);	
+		var sdp = data.sdp;
+		createAnswer(sdp,data.id);
 	/*TODO: Serve the section of the file to another user
 	Recieve an SDP*/
 	});
 	
-  });
+	
+	socket.on('reply', function (data) {
+		console.log(data);	
+		var sdp = data.sdp;
+		
+		setDownloaderChannelEvents(offererDataChannel, 'download', data.id,data.filesize);
+		
+        offerer.setRemoteDescription(new RTCSessionDescription(sdp));
+	/*TODO: Serve the section of the file to another user
+	Recieve an SDP*/
+	});
+	
+	socket.on('answericecandidate', function (data) {
+		console.log(data);	
+        offerer.addIceCandidate(new RTCIceCandidate(data.candidate));
+	});
+	
+	socket.on('offericecandidate', function (data) {
+		console.log(data);	
+        answerer.addIceCandidate(new RTCIceCandidate(data.candidate));
+	});
+	
+	
+	
+/**BEGIN FILE TRANSFER CODE**/
+	
+function _arrayBufferToBase64( buffer ) {
+    var binary = ''
+    var bytes = new Uint8Array( buffer )
+    var len = bytes.byteLength;
+    for (var i = 0; i < len; i++) {
+        binary += String.fromCharCode( bytes[ i ] )
+    }
+    return window.btoa( binary );
+}
+function sendChunk(start,end, channel, id)
+{
+	var onInitFsRead = function (fs) {
+
+	  fs.root.getFile(id, {}, function(fileEntry) {
+
+		// Get a File object representing the file,
+		// then use FileReader to read its contents.
+		fileEntry.file(function(file) {
+		   var reader = new FileReader();
+
+		   reader.onloadend = function(e) {
+			 var src = this.result;
+			 var b64 = _arrayBufferToBase64(src);
+			 var payload = {type:'chunk',data:b64, size:src.byteLength};
+			 channel.send(JSON.stringify(payload));
+		   };
+
+		   reader.readAsArrayBuffer(file.slice(start,end));
+		}, errorHandler);
+
+	  }, errorHandler);
+
+	};
+
+	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFsRead, errorHandler);
+}
+/**END FILE TRANSFER CODE**/
+
 </script>
 
+<input type="file" id="myfile" multiple /><br>
+
+<ul id="filelist"></ul>
+<script>
+
+window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
+
+
+	function errorHandler(e) {
+  var msg = '';
+
+  switch (e.code) {
+    case FileError.QUOTA_EXCEEDED_ERR:
+      msg = 'QUOTA_EXCEEDED_ERR';
+      break;
+    case FileError.NOT_FOUND_ERR:
+      msg = 'NOT_FOUND_ERR';
+      break;
+    case FileError.SECURITY_ERR:
+      msg = 'SECURITY_ERR';
+      break;
+    case FileError.INVALID_MODIFICATION_ERR:
+      msg = 'INVALID_MODIFICATION_ERR';
+      break;
+    case FileError.INVALID_STATE_ERR:
+      msg = 'INVALID_STATE_ERR';
+      break;
+    default:
+      msg = 'Unknown Error';
+      break;
+  };
+
+  console.log('Error: ' + msg);
+}
+	
+	function toArray(list) {
+  return Array.prototype.slice.call(list || [], 0);
+}
+
+/*Begin dir listing*/
+function listResults(entries) {
+  // Document fragments can improve performance since they're only appended
+  // to the DOM once. Only one browser reflow occurs.
+  var fragment = document.createDocumentFragment();
+
+  entries.forEach(function(entry, i) {
+    var img = entry.isDirectory ? '<img src="folder-icon.gif">' :
+                                  '<img src="file-icon.gif">';
+    var li = document.createElement('li');
+    li.innerHTML = [img, '<span>', entry.name, '</span>'].join('');
+    fragment.appendChild(li);
+  });
+
+  document.querySelector('#filelist').innerHTML = "";
+  document.querySelector('#filelist').appendChild(fragment);
+}
+
+function onInitFs(fs) {
+
+  var dirReader = fs.root.createReader();
+  var entries = [];
+
+  // Call the reader.readEntries() until no more results are returned.
+  var readEntries = function() {
+     dirReader.readEntries (function(results) {
+      if (!results.length) {
+        listResults(entries.sort());
+      } else {
+        entries = entries.concat(toArray(results));
+        readEntries();
+      }
+    }, errorHandler);
+  };
+
+  readEntries(); // Start reading dirs.
+
+}
+/*End dir listing*/
+	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFs, errorHandler);
+	
+	document.querySelector('#myfile').onchange = function(e) {
+		  var files = this.files;
+			
+		  window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
+			// Duplicate each file the user selected to the app's fs.
+			for (var i = 0, file; file = files[i]; ++i) {
+
+			  // Capture current iteration's file in local scope for the getFile() callback.
+			  createFile(file,function(f,name) {
+				fs.root.getFile(name, {create: true, exclusive: true}, function(fileEntry) {
+				
+				  fileEntry.createWriter(function(fileWriter) {
+					fileWriter.write(f); // Note: write() can take a File or Blob object.
+					onInitFs(fs);
+				  }, errorHandler);
+				  
+				}, errorHandler);
+			  });
+
+			}
+  }, errorHandler);
+
+};
+
+/**Base64 code**/
+
+Base64Binary = {
+	_keyStr : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+
+	/* will return a  Uint8Array type */
+	decodeArrayBuffer: function(input) {
+		var bytes = (input.length/4) * 3;
+		var ab = new ArrayBuffer(bytes);
+		this.decode(input, ab);
+
+		return ab;
+	},
+
+	decode: function(input, arrayBuffer) {
+		//get last chars to see if are valid
+		var lkey1 = this._keyStr.indexOf(input.charAt(input.length-1));		 
+		var lkey2 = this._keyStr.indexOf(input.charAt(input.length-2));		 
+
+		var bytes = (input.length/4) * 3;
+		if (lkey1 == 64) bytes--; //padding chars, so skip
+		if (lkey2 == 64) bytes--; //padding chars, so skip
+
+		var uarray;
+		var chr1, chr2, chr3;
+		var enc1, enc2, enc3, enc4;
+		var i = 0;
+		var j = 0;
+
+		if (arrayBuffer)
+			uarray = new Uint8Array(arrayBuffer);
+		else
+			uarray = new Uint8Array(bytes);
+
+		input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+
+		for (i=0; i<bytes; i+=3) {	
+			//get the 3 octects in 4 ascii chars
+			enc1 = this._keyStr.indexOf(input.charAt(j++));
+			enc2 = this._keyStr.indexOf(input.charAt(j++));
+			enc3 = this._keyStr.indexOf(input.charAt(j++));
+			enc4 = this._keyStr.indexOf(input.charAt(j++));
+
+			chr1 = (enc1 << 2) | (enc2 >> 4);
+			chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+			chr3 = ((enc3 & 3) << 6) | enc4;
+
+			uarray[i] = chr1;			
+			if (enc3 != 64) uarray[i+1] = chr2;
+			if (enc4 != 64) uarray[i+2] = chr3;
+		}
+
+		return uarray;	
+	}
+}
+/***/
+</script>
 </body>
 </html>
