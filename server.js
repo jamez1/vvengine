@@ -64,7 +64,7 @@ sio.sockets.on('connection', function (socket) {
 		var newFile = {
 			id: util.guid(),
 			users: new Array(),
-			filesize: 100
+			filesize: data.size
 			};
 		//Register client on file
 		newFile.users.push(socket);

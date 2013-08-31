@@ -82,10 +82,17 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 		switch (obj.type)
 		{
 			case 'getchunk':
-				var start = obj.start;
-				var end = obj.end;
 				var id = obj.id;
-				sendChunk(start,end,channel,id);
+				var length = obj.end - obj.start;
+				
+					for (var i = 0; i < length; i+=100)
+					{
+						var start = obj.start + i;
+						var end = obj.start + i + 100;
+						
+						setTimeout(sendChunk,300,start,end,channel,id);
+					}
+				
 			break;
 				
 		}
@@ -106,7 +113,8 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, filesize) {
 	start = 0;
 	end = filesize;
-	var chunkarray = new ArrayBuffer(filesize);
+	total = 0;
+	var chunkarray = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
         console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
@@ -120,19 +128,26 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 				var trimmed = bin.slice(0,obj.size);
 				var name = obj.id;
 				
-				window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
-				  // Capture current iteration's file in local scope for the getFile() callback.
-				  
-					fs.root.getFile(name, {create: true, exclusive: true}, function(fileEntry) {
-					
-						fileEntry.createWriter(function(fileWriter) {
-							fileWriter.write(trimmed); // Note: write() can take a File or Blob object.
-							onInitFs(fs);
-						}, errorHandler);
+				chunkarray.set( new Uint8Array( trimmed ), obj.start);
+				console.log ('Start ' + obj.start + ' Size ' + obj.size);
+				total += obj.size;
+				
+				if (total==end)
+					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
+					  // Capture current iteration's file in local scope for the getFile() callback.
 					  
-					}, errorHandler);
+						fs.root.getFile(name + ' save', {create: true, exclusive: true}, function(fileEntry) {
 						
-				}, errorHandler);
+							fileEntry.createWriter(function(fileWriter) {
+								var dataView = new DataView(chunkarray);
+								var blob = new Blob([dataView]);
+								fileWriter.write(blob); // Note: write() can take a File or Blob object.
+								onInitFs(fs);
+							}, errorHandler);
+						  
+						}, errorHandler);
+							
+					}, errorHandler);
 
 			
 			break;
@@ -161,7 +176,7 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
   
 	function createFile(file,callback)
 	{
-		socket.emit('newfile', { filename: file.name });
+		socket.emit('newfile', { size:file.size });
 		socket.on('filecreated', function (data) {
 			console.log(data);	
 			callback(file, data.id);
@@ -226,6 +241,12 @@ function _arrayBufferToBase64( buffer ) {
 }
 function sendChunk(start,end, channel, id)
 {
+	if (channel.bufferedAmount>end-start)
+	{
+		setTimeout(sendChunk,300,start,end,channel,id);
+		return;
+	}	
+	
 	var onInitFsRead = function (fs) {
 
 	  fs.root.getFile(id, {}, function(fileEntry) {
@@ -238,7 +259,8 @@ function sendChunk(start,end, channel, id)
 		   reader.onloadend = function(e) {
 			 var src = this.result;
 			 var b64 = _arrayBufferToBase64(src);
-			 var payload = {type:'chunk',data:b64, size:src.byteLength};
+			 var payload = {type:'chunk',data:b64, start:start, size:src.byteLength, id:id};
+			 console.log ('Start ' + start + ' Size ' + src.byteLength);
 			 channel.send(JSON.stringify(payload));
 		   };
 
@@ -304,7 +326,9 @@ function listResults(entries) {
     var img = entry.isDirectory ? '<img src="folder-icon.gif">' :
                                   '<img src="file-icon.gif">';
     var li = document.createElement('li');
-    li.innerHTML = [img, '<span>', entry.name, '</span>'].join('');
+	var startanchor = '<a href="' + entry.toURL() + '">';
+	var endanchor = '</a>';
+    li.innerHTML = [img, '<span>', startanchor, entry.name, endanchor,'</span>'].join('');
     fragment.appendChild(li);
   });
 
@@ -414,6 +438,15 @@ Base64Binary = {
 		return uarray;	
 	}
 }
+/***/
+
+/*** Quota measure code 
+window.webkitStorageInfo.queryUsageAndQuota(webkitStorageInfo.TEMPORARY, //the type can be either TEMPORARY or PERSISTENT
+function(used, remaining) {
+  console.log("Used quota: " + used + ", remaining quota: " + remaining);
+}, function(e) {
+  console.log('Error', e); 
+} );
 /***/
 </script>
 </body>
