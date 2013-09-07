@@ -24,7 +24,7 @@ dataChannel.onmessage = dcMessage;
 }
 
 var offererDataChannel = offerer.createDataChannel('RTCDataChannel', {
-    reliable: false
+    reliable: true
 });
 setChannelEvents(offererDataChannel, 'offerer');
 
@@ -44,6 +44,16 @@ var mediaConstraints = {
 
 //offerer.createOffer(recieveSDP, null, mediaConstraints);
 
+/**Trial speed upgrade*/
+function transformOutgoingSdp(sdp) {
+	var split = sdp.split("b=AS:30");
+	if(split.length > 1)
+		var newSDP = split[0] + "b=AS:1638400" + split[1];
+	else
+		newSDP = sdp;
+	return newSDP;
+}
+			
 function recieveSDP(sessionDescription) {
     offerer.setLocalDescription(sessionDescription);
     createAnswer(sessionDescription);
@@ -52,7 +62,7 @@ function recieveSDP(sessionDescription) {
 function createAnswer(offerSDP,id) {
     answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
     answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
-        reliable: false
+        reliable: true
     });
 
     setChannelEvents(answererDataChannel, 'answerer');
@@ -73,7 +83,99 @@ function createAnswer(offerSDP,id) {
     }, null, mediaConstraints);
 }
 
+
 function setChannelEvents(channel, channelNameForConsoleOutput) {
+
+	var s = -1;
+	var increment = 1000;
+	/*
+	var transfer = function (start,end, channel, id,src,increment)
+	{
+	
+		for (s = start;s<end && s!=-1;s+=increment)
+		{
+			
+			var srcCut = src.slice(s,s + increment);
+					
+			var payload = {type:'chunk',data:srcCut, start:s, size:srcCut.length, id:id};
+			
+			setTimeout(channel.send,0,(JSON.stringify(payload)));
+		
+		}
+	};*/
+/*
+	var segment = function (start,end, channel, id,src,increment)
+	{
+		for (t = start;t<end && s!=-1;t+=increment)
+		{
+			var srcCut = src.slice(t,t + increment);
+					
+			var payload = {type:'chunk',data:srcCut, start:t, size:srcCut.length, id:id};
+			
+			channel.send(JSON.stringify(payload));
+			
+		}
+	};
+	var transfer = function (start,end, channel, id,src,increment)
+	{
+		var blocksize = increment*10;
+
+		for (s = start;s<end && s!=-1;s+=blocksize)
+		{
+			var blockend = Math.min(s + blocksize, end);
+			console.log('sending block ' + s);
+			setTimeout(segment,100,s , blockend, channel, id, src, increment);
+		
+		}
+	};*/
+
+/**No Timeout implementation - breakneck speeds 3mb/s**/
+/*
+function transfer(start,end, channel, id,src,increment)
+{
+	for (s = start;s<end;s+=increment)
+	{
+		var srcCut = src.slice(s,s + increment);
+				
+		var payload = {type:'chunk',data:srcCut, start:s, size:srcCut.length, id:id};
+		
+		channel.send(JSON.stringify(payload));
+		
+	}
+}
+*/
+
+/*** setTimeout implementation - very slow 1-2kb/s*/
+function transfer(start,end, channel, id,src,increment)
+{
+	if (s!=-1)
+	{
+		console.log ('resettting start from ' + start + ' to ' + s);
+		start = s;
+		s=-1;
+	}
+
+	var srcCut = src.slice(start,start + increment);
+				
+	var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
+		
+	channel.send(JSON.stringify(payload));
+	
+	if (start + increment < end)
+		setTimeout(transfer, 0,start + increment , end, channel, id, src, increment);
+	else
+	{
+		var srcCut = src.slice(start,end);
+				
+		var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
+			
+		channel.send(JSON.stringify(payload));
+	}
+	
+}
+
+
+
     channel.onmessage = function (event) {
         console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
 		
@@ -85,16 +187,38 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 				var id = obj.id;
 				var length = obj.end - obj.start;
 				
-					for (var i = 0; i < length; i+=100)
-					{
-						var start = obj.start + i;
-						var end = obj.start + i + 100;
+				var onInitFsRead = function (fs) {
+					fs.root.getFile(id, {}, function(fileEntry) {
+						fileEntry.file(function(file) {
 						
-						setTimeout(sendChunk,300,start,end,channel,id);
-					}
-				
+							var reader = new FileReader();
+
+							reader.onloadend = function(e) {
+								var src = this.result;
+								var b64 = _arrayBufferToBase64(src);
+							 
+								var start = obj.start;
+								var end = b64.length;
+								
+								var payload = {type:'fileinfo',start:start, end:end, id:id};
+								channel.send(JSON.stringify(payload));
+								
+								transfer(start,end,channel,id,b64,increment);
+		
+							};
+
+							reader.readAsArrayBuffer(file);
+						}, errorHandler);
+					}, errorHandler);
+				};
+
+				window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFsRead, errorHandler);
 			break;
 				
+			case 'reset':
+				console.log ('recv reset command reset to ' + obj.start);
+				s = obj.start-increment;
+			break;
 		}
     };
 
@@ -112,43 +236,78 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 
 function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, filesize) {
 	start = 0;
-	end = filesize;
+	end = 0;//filesize;
 	total = 0;
-	var chunkarray = new Uint8Array(filesize);
+	expected = 0;
+	var recv = "";
+	//var chunkarray;// = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
-        console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
-		
+        //console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
+		/***james disable for testing**/
 		var obj = JSON.parse(event.data);
 		
 		switch (obj.type)
 		{
+			case 'fileinfo':
+				end = obj.end;
+				chunkarray = new Uint8Array(obj.end);
+				console.log('set end to ' + end);
+			break;
 			case 'chunk':
-				var bin = Base64Binary.decodeArrayBuffer(obj.data);
-				var trimmed = bin.slice(0,obj.size);
 				var name = obj.id;
+				/*var bin = Base64Binary.decodeArrayBuffer(obj.data);
+				var trimmed = bin.slice(0,obj.size);
+				
 				
 				chunkarray.set( new Uint8Array( trimmed ), obj.start);
-				console.log ('Start ' + obj.start + ' Size ' + obj.size);
 				total += obj.size;
+				*/
+				console.log ('At:' + total + ' End:' + end);
 				
-				if (total==end)
+				
+				if (total+obj.size==end)
+				{
+					recv += obj.data;
+					console.log('finished, writing file');
+					chunkarray = Base64Binary.decodeArrayBuffer(recv);
 					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
 					  // Capture current iteration's file in local scope for the getFile() callback.
-					  
+						console.log('got file system');
 						fs.root.getFile(name + ' save', {create: true, exclusive: true}, function(fileEntry) {
-						
+							console.log('created entry');
 							fileEntry.createWriter(function(fileWriter) {
-								var dataView = new DataView(chunkarray);
-								var blob = new Blob([dataView]);
+								//var dataView = new DataView(chunkarray);
+								var blob = new Blob([chunkarray]);
 								fileWriter.write(blob); // Note: write() can take a File or Blob object.
 								onInitFs(fs);
+								console.log('new file ' + fileEntry.name);
 							}, errorHandler);
 						  
 						}, errorHandler);
 							
 					}, errorHandler);
-
+				}
+				else if (obj.start> total )
+				{
+					console.log ('missing packet at ' + total + ' recieved ' + obj.start);
+				
+					var payload = {
+						type:'reset',
+						start:total
+					};
+					
+					var json = JSON.stringify(payload);
+					
+					channel.send(json);
+					//Request missing chunk again
+					
+				}
+				else
+				{
+					recv += obj.data;
+					total += obj.size;
+				}
 			
 			break;
 				
@@ -174,22 +333,11 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 <script>
   var socket = io.connect('http://localhost:3000/');
   
-	function createFile(file,callback)
-	{
-		socket.emit('newfile', { size:file.size });
-		socket.on('filecreated', function (data) {
-			console.log(data);	
-			callback(file, data.id);
-			
-		/*TODO: Serve the section of the file to another user
-		Recieve an SDP*/
-		});
-	}
-	
 	function getFile(id)
 	{
 		offerer.createOffer(
 			function (sessionDescription) {
+				sessionDescription.sdp = transformOutgoingSdp(sessionDescription.sdp);
 				offerer.setLocalDescription(sessionDescription);
 				socket.emit('getchunk', {id:id, sdp:sessionDescription});
 			}, 
@@ -239,40 +387,7 @@ function _arrayBufferToBase64( buffer ) {
     }
     return window.btoa( binary );
 }
-function sendChunk(start,end, channel, id)
-{
-	if (channel.bufferedAmount>end-start)
-	{
-		setTimeout(sendChunk,300,start,end,channel,id);
-		return;
-	}	
-	
-	var onInitFsRead = function (fs) {
 
-	  fs.root.getFile(id, {}, function(fileEntry) {
-
-		// Get a File object representing the file,
-		// then use FileReader to read its contents.
-		fileEntry.file(function(file) {
-		   var reader = new FileReader();
-
-		   reader.onloadend = function(e) {
-			 var src = this.result;
-			 var b64 = _arrayBufferToBase64(src);
-			 var payload = {type:'chunk',data:b64, start:start, size:src.byteLength, id:id};
-			 console.log ('Start ' + start + ' Size ' + src.byteLength);
-			 channel.send(JSON.stringify(payload));
-		   };
-
-		   reader.readAsArrayBuffer(file.slice(start,end));
-		}, errorHandler);
-
-	  }, errorHandler);
-
-	};
-
-	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFsRead, errorHandler);
-}
 /**END FILE TRANSFER CODE**/
 
 </script>
@@ -357,6 +472,20 @@ function onInitFs(fs) {
 
 }
 /*End dir listing*/
+
+
+	function createFile(file,callback)
+	{
+		socket.emit('newfile', { size:file.size });
+		socket.on('filecreated', function (data) {
+			console.log(data);	
+			callback(file, data.id);
+			
+		/*TODO: Serve the section of the file to another user
+		Recieve an SDP*/
+		});
+	}
+
 	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFs, errorHandler);
 	
 	document.querySelector('#myfile').onchange = function(e) {
