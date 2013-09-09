@@ -95,8 +95,14 @@ sio.sockets.on('connection', function (socket) {
 		//Add stream to data store
 		streams.push(newStream);
 		
+		
+		var payload = {
+				id: newStream.id,
+				files: newStream.files
+				};
+		
 		//Alert client to successful file registration
-		socket.emit('streamcreated', {id: newStream.id});
+		socket.emit('joinedstream',payload);
 		
 		
 		console.log('New stream created ' + newStream.id);
@@ -121,7 +127,7 @@ sio.sockets.on('connection', function (socket) {
 		for (var t = 0;t<stream.users.length;t++)
 		{
 			console.log ('reporting to ' + stream.users[t].id);
-			stream.users[t].emit('streamfileregistered', {id: data.fileid});
+			stream.users[t].emit('streamfileregistered', {streamid:data.streamid,fileid: data.fileid});
 		}
 		
 		console.log('New file ' + data.fileid + ' attached to stream ' + data.streamid);
@@ -132,7 +138,7 @@ sio.sockets.on('connection', function (socket) {
 	socket.on('registerstream', function (data) {
 		var streamindex = getStream(data.streamid);
 		
-		if (index==-1)
+		if (streamindex==-1)
 		{
 			console.log('No stream found');
 			console.log('id:' + data.id);
@@ -148,7 +154,7 @@ sio.sockets.on('connection', function (socket) {
 				files: stream.files
 				};
 		
-		socket.emit(payload);
+		socket.emit('joinedstream',payload);
 		console.log('New user registered on stream ' + data.id);
 	/*TODO: Register the user for a given file*/
 	});
