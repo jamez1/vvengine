@@ -1,8 +1,18 @@
 <html>
 <body>
+<script src="/socket.io/socket.io.js"></script>
 <script>
 
 /**Prepare connection**/
+
+var connections = new Array();
+var recv = new Array();
+var total = new Array();
+var start = new Array();
+var end = new Array();
+var expected = new Array();
+
+/*GLOBAL WEBRTC SETTINGS*/
 var iceServers = {
     iceServers: [{
         url: 'stun:stun.l.google.com:19302'
@@ -14,26 +24,6 @@ var optionalRtpDataChannels = {
         RtpDataChannels: true
     }]
 };
-
-var offerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels),
-    answerer, answererDataChannel;
-	
-offerer.ondatachannel = function(event){ 
-dataChannel = event.channel; 
-dataChannel.onmessage = dcMessage; 
-}
-
-var offererDataChannel = offerer.createDataChannel('RTCDataChannel', {
-    reliable: true
-});
-setChannelEvents(offererDataChannel, 'offerer');
-
-offerer.onicecandidate = function (event) {
-    if (!event || !event.candidate) return;
-		socket.emit('offericecandidate', {id:'', candidate:event.candidate});
-    //answerer && answerer.addIceCandidate(event.candidate);
-};
-
 var mediaConstraints = {
     optional: [],
     mandatory: {
@@ -41,10 +31,9 @@ var mediaConstraints = {
         OfferToReceiveVideo: false 
     }
 };
+/*global settings*/
 
-//offerer.createOffer(recieveSDP, null, mediaConstraints);
-
-/**Trial speed upgrade*/
+/*Trial speed upgrade*/
 function transformOutgoingSdp(sdp) {
 	var split = sdp.split("b=AS:30");
 	if(split.length > 1)
@@ -53,35 +42,8 @@ function transformOutgoingSdp(sdp) {
 		newSDP = sdp;
 	return newSDP;
 }
-			
-function recieveSDP(sessionDescription) {
-    offerer.setLocalDescription(sessionDescription);
-    createAnswer(sessionDescription);
-}
+/*global funcs*/
 
-function createAnswer(offerSDP,id) {
-    answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
-    answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
-        reliable: true
-    });
-
-    setChannelEvents(answererDataChannel, 'answerer');
-
-    answerer.onicecandidate = function (event) {
-        if (!event || !event.candidate) return;
-		socket.emit('answericecandidate', {id:id, candidate:event.candidate});
-        //offerer && offerer.addIceCandidate(event.candidate);
-    };
-
-    answerer.setRemoteDescription(new RTCSessionDescription(offerSDP));
-	
-	console.log('recieved SDP sending reply');
-	
-    answerer.createAnswer(function (sessionDescription) {
-        answerer.setLocalDescription(sessionDescription);
-		socket.emit('connect', {id:id, sdp:sessionDescription});
-    }, null, mediaConstraints);
-}
 
 
 function setChannelEvents(channel, channelNameForConsoleOutput) {
@@ -131,48 +93,48 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 
 /**No Timeout implementation - breakneck speeds 3mb/s**/
 /*
-function transfer(start,end, channel, id,src,increment)
-{
-	for (s = start;s<end;s+=increment)
+	function transfer(start,end, channel, id,src,increment)
 	{
-		var srcCut = src.slice(s,s + increment);
-				
-		var payload = {type:'chunk',data:srcCut, start:s, size:srcCut.length, id:id};
-		
-		channel.send(JSON.stringify(payload));
-		
+		for (s = start;s<end;s+=increment)
+		{
+			var srcCut = src.slice(s,s + increment);
+					
+			var payload = {type:'chunk',data:srcCut, start:s, size:srcCut.length, id:id};
+			
+			channel.send(JSON.stringify(payload));
+			
+		}
 	}
-}
 */
 
-/*** setTimeout implementation - very slow 1-2kb/s*/
-function transfer(start,end, channel, id,src,increment)
-{
-	if (s!=-1)
+	/*** setTimeout implementation - very slow 1-2kb/s when in chrome inactive window*/
+	function transfer(start,end, channel, id,src,increment)
 	{
-		console.log ('resettting start from ' + start + ' to ' + s);
-		start = s;
-		s=-1;
-	}
+		if (s!=-1)
+		{
+			console.log ('resettting start from ' + start + ' to ' + s);
+			start = s;
+			s=-1;
+		}
 
-	var srcCut = src.slice(start,start + increment);
-				
-	var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
-		
-	channel.send(JSON.stringify(payload));
-	
-	if (start + increment < end)
-		setTimeout(transfer, 0,start + increment , end, channel, id, src, increment);
-	else
-	{
-		var srcCut = src.slice(start,end);
-				
+		var srcCut = src.slice(start,start + increment);
+					
 		var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
 			
 		channel.send(JSON.stringify(payload));
+		
+		if (start + increment < end)
+			setTimeout(transfer, 0,start + increment , end, channel, id, src, increment);
+		else
+		{
+			var srcCut = src.slice(start,end);
+					
+			var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
+				
+			channel.send(JSON.stringify(payload));
+		}
+		
 	}
-	
-}
 
 
 
@@ -234,12 +196,11 @@ function transfer(start,end, channel, id,src,increment)
     };
 }
 
-function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, filesize) {
-	start = 0;
-	end = 0;//filesize;
-	total = 0;
-	expected = 0;
-	var recv = "";
+function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, filesize,channelid) {
+	start[channelid] = 0;
+	end[channelid] = 0;//filesize;
+	total[channelid] = 0;
+	recv[channelid] = "";
 	//var chunkarray;// = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
@@ -250,9 +211,9 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 		switch (obj.type)
 		{
 			case 'fileinfo':
-				end = obj.end;
+				end[channelid] = obj.end;
 				chunkarray = new Uint8Array(obj.end);
-				console.log('set end to ' + end);
+				console.log(channelNameForConsoleOutput + ' set end to ' + end[channelid]);
 			break;
 			case 'chunk':
 				var name = obj.id;
@@ -263,14 +224,15 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 				chunkarray.set( new Uint8Array( trimmed ), obj.start);
 				total += obj.size;
 				*/
-				console.log ('At:' + total + ' End:' + end);
+				console.log (channelNameForConsoleOutput + ' At:' + total[channelid] + ' End:' + end[channelid]);
 				
 				
-				if (total+obj.size==end)
+				if (total[channelid]+obj.size==end[channelid])
 				{
-					recv += obj.data;
+					recv[channelid] += obj.data;
+					total[channelid] += obj.size;
 					console.log('finished, writing file');
-					chunkarray = Base64Binary.decodeArrayBuffer(recv);
+					chunkarray = Base64Binary.decodeArrayBuffer(recv[channelid]);
 					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
 					  // Capture current iteration's file in local scope for the getFile() callback.
 						console.log('got file system');
@@ -288,13 +250,13 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 							
 					}, errorHandler);
 				}
-				else if (obj.start> total )
+				else if (obj.start> total[channelid] )
 				{
-					console.log ('missing packet at ' + total + ' recieved ' + obj.start);
+					console.log (channelNameForConsoleOutput + ' missing packet at ' + total[channelid] + ' recieved ' + obj.start);
 				
 					var payload = {
 						type:'reset',
-						start:total
+						start:total[channelid]
 					};
 					
 					var json = JSON.stringify(payload);
@@ -303,10 +265,14 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 					//Request missing chunk again
 					
 				}
+				else if (total[channelid]+obj.size>end[channelid])
+				{
+					console.log ('total exceeded');
+				}
 				else
 				{
-					recv += obj.data;
-					total += obj.size;
+					recv[channelid] += obj.data;
+					total[channelid] += obj.size;
 				}
 			
 			break;
@@ -319,76 +285,111 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 	
 		var payload = {
 			type:'getchunk',
-			start:start,
-			end:end,
+			start:start[channelid],
+			end: filesize,//end[channelid],
 			id:id
 		};
 		
         channel.send(JSON.stringify(payload));
     };
 }
-</script>
 
-<script src="/socket.io/socket.io.js"></script>
-<script>
-  var socket = io.connect('http://localhost:3000/');
-  
-	function getFile(id)
-	{
-		offerer.createOffer(
-			function (sessionDescription) {
-				sessionDescription.sdp = transformOutgoingSdp(sessionDescription.sdp);
-				offerer.setLocalDescription(sessionDescription);
-				socket.emit('getchunk', {id:id, sdp:sessionDescription});
-			}, 
-			null, mediaConstraints);
-	}
+
+
+function createAnswer(offerSDP,id,channelid) {
+    answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
+    answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
+        reliable: true
+    });
+
+    setChannelEvents(answererDataChannel, 'answerer');
+
+    answerer.onicecandidate = function (event) {
+        if (!event || !event.candidate) return;
+		socket.emit('answericecandidate', {id:id, candidate:event.candidate, channelid:channelid});
+        //offerer && offerer.addIceCandidate(event.candidate);
+    };
+
+    answerer.setRemoteDescription(new RTCSessionDescription(offerSDP));
 	
-	socket.on('get', function (data) {
-		console.log(data);	
-		var sdp = data.sdp;
-		createAnswer(sdp,data.id);
-	/*TODO: Serve the section of the file to another user
-	Recieve an SDP*/
-	});
+	console.log('recieved SDP sending reply');
 	
-	
-	socket.on('reply', function (data) {
-		console.log(data);	
-		var sdp = data.sdp;
-		
-		setDownloaderChannelEvents(offererDataChannel, 'download', data.id,data.filesize);
-		
-        offerer.setRemoteDescription(new RTCSessionDescription(sdp));
-	/*TODO: Serve the section of the file to another user
-	Recieve an SDP*/
-	});
-	
-	socket.on('answericecandidate', function (data) {
-		console.log(data);	
-        offerer.addIceCandidate(new RTCIceCandidate(data.candidate));
-	});
-	
-	socket.on('offericecandidate', function (data) {
-		console.log(data);	
-        answerer.addIceCandidate(new RTCIceCandidate(data.candidate));
-	});
-	
-	
-	
-/**BEGIN FILE TRANSFER CODE**/
-	
-function _arrayBufferToBase64( buffer ) {
-    var binary = ''
-    var bytes = new Uint8Array( buffer )
-    var len = bytes.byteLength;
-    for (var i = 0; i < len; i++) {
-        binary += String.fromCharCode( bytes[ i ] )
-    }
-    return window.btoa( binary );
+    answerer.createAnswer(function (sessionDescription) {
+        answerer.setLocalDescription(sessionDescription);
+		socket.emit('connect', {id:id, sdp:sessionDescription, channelid:channelid});
+    }, null, mediaConstraints);
 }
 
-/**END FILE TRANSFER CODE**/
+var socket = io.connect('http://localhost:3000/');
+
+function getFile(id)
+{
+/*New Offerer DataChannel to recieve file down*/
+	var channelid = connections.length;
+	
+	var offerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
+	
+	var offererDataChannel = offerer.createDataChannel('RTCDataChannel', {
+		reliable: true
+	});
+
+	offerer.onicecandidate = function (event) {
+		if (!event || !event.candidate) return;
+			socket.emit('offericecandidate', {channelid:channelid, candidate:event.candidate});
+	};
+	
+	connections[channelid] = {offerer:offerer, offererDataChannel:offererDataChannel};
+/*New Offerer DataChannel to recieve file down*/
+
+
+	setChannelEvents(offererDataChannel, 'offerer');
+	
+	offerer.createOffer(
+		function (sessionDescription) {
+			sessionDescription.sdp = transformOutgoingSdp(sessionDescription.sdp);
+			offerer.setLocalDescription(sessionDescription);
+			socket.emit('getchunk', {id:id, sdp:sessionDescription, channelid:channelid});
+		}, 
+		null, mediaConstraints);
+}
+
+socket.on('get', function (data) {
+	console.log(data);	
+	var sdp = data.sdp;
+	createAnswer(sdp,data.id,data.channelid);
+/*TODO: Serve the section of the file to another user
+Recieve an SDP*/
+});
+
+
+socket.on('offericecandidate', function (data) {
+	console.log(data);	
+    answerer.addIceCandidate(new RTCIceCandidate(data.candidate));
+});
+
+
+socket.on('reply', function (data) {
+	console.log(data);	
+	var sdp = data.sdp;
+	var channelid = data.channelid;
+	
+	console.log('running events under channel ' + channelid);
+	setDownloaderChannelEvents(connections[channelid].offererDataChannel, 'download' + channelid, data.id,data.filesize, channelid);
+	
+    connections[channelid].offerer.setRemoteDescription(new RTCSessionDescription(sdp));
+/*TODO: Serve the section of the file to another user
+Recieve an SDP*/
+});
+
+socket.on('answericecandidate', function (data) {
+	console.log(data);	
+	var channelid = data.channelid;
+	
+    connections[channelid].offerer.addIceCandidate(new RTCIceCandidate(data.candidate));
+});
+	
+	
+
 
 </script>
 
@@ -400,35 +401,35 @@ function _arrayBufferToBase64( buffer ) {
 window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 
 
-	function errorHandler(e) {
-  var msg = '';
+function errorHandler(e) {
+	var msg = '';
 
-  switch (e.code) {
-    case FileError.QUOTA_EXCEEDED_ERR:
-      msg = 'QUOTA_EXCEEDED_ERR';
-      break;
-    case FileError.NOT_FOUND_ERR:
-      msg = 'NOT_FOUND_ERR';
-      break;
-    case FileError.SECURITY_ERR:
-      msg = 'SECURITY_ERR';
-      break;
-    case FileError.INVALID_MODIFICATION_ERR:
-      msg = 'INVALID_MODIFICATION_ERR';
-      break;
-    case FileError.INVALID_STATE_ERR:
-      msg = 'INVALID_STATE_ERR';
-      break;
-    default:
-      msg = 'Unknown Error';
-      break;
-  };
+	switch (e.code) {
+		case FileError.QUOTA_EXCEEDED_ERR:
+		msg = 'QUOTA_EXCEEDED_ERR';
+		break;
+		case FileError.NOT_FOUND_ERR:
+		msg = 'NOT_FOUND_ERR';
+		break;
+		case FileError.SECURITY_ERR:
+		msg = 'SECURITY_ERR';
+		break;
+		case FileError.INVALID_MODIFICATION_ERR:
+		msg = 'INVALID_MODIFICATION_ERR';
+		break;
+		case FileError.INVALID_STATE_ERR:
+		msg = 'INVALID_STATE_ERR';
+		break;
+		default:
+		msg = 'Unknown Error';
+		break;
+	};
 
   console.log('Error: ' + msg);
 }
 	
-	function toArray(list) {
-  return Array.prototype.slice.call(list || [], 0);
+function toArray(list) {
+	return Array.prototype.slice.call(list || [], 0);
 }
 
 /*Begin dir listing*/
@@ -474,17 +475,18 @@ function onInitFs(fs) {
 /*End dir listing*/
 
 
-	function createFile(file,callback)
-	{
-		socket.emit('newfile', { size:file.size });
-		socket.on('filecreated', function (data) {
-			console.log(data);	
-			callback(file, data.id);
-			
-		/*TODO: Serve the section of the file to another user
-		Recieve an SDP*/
-		});
-	}
+function createFile(file,callback)
+{
+	socket.emit('newfile', { size:file.size });
+	socket.removeAllListeners('filecreated');
+	socket.on('filecreated', function (data) {
+		console.log(data);	
+		callback(file, data.id);
+		
+	/*TODO: Serve the section of the file to another user
+	Recieve an SDP*/
+	});
+}
 
 	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFs, errorHandler);
 	
@@ -513,6 +515,16 @@ function onInitFs(fs) {
 };
 
 /**Base64 code**/
+	
+function _arrayBufferToBase64( buffer ) {
+    var binary = ''
+    var bytes = new Uint8Array( buffer )
+    var len = bytes.byteLength;
+    for (var i = 0; i < len; i++) {
+        binary += String.fromCharCode( bytes[ i ] )
+    }
+    return window.btoa( binary );
+}
 
 Base64Binary = {
 	_keyStr : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
