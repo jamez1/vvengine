@@ -1,10 +1,25 @@
 <html>
 <body>
+<a href="#" onclick="createStream();">Create new Stream</a>
+<div id="streamheader"></div>
+
+<div id="files">
+<input type="file" id="myfile" multiple /><br>
+
+<ul id="filelist"></ul>
+</div>
+
+<div id="playback">
+<video id="video">
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
 <script>
 
 /**Prepare connection**/
 var streamid = '<%= id%>';
+var streamfiles = new Array();
+
 var connections = new Array();
 var recv = new Array();
 var total = new Array();
@@ -41,6 +56,13 @@ function transformOutgoingSdp(sdp) {
 	else
 		newSDP = sdp;
 	return newSDP;
+}
+
+function playFile(file)
+{
+	var a = document.querySelector('#video');
+	a.setAttribute('src', file);
+	a.play();
 }
 /*global funcs*/
 
@@ -236,13 +258,14 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
 					  // Capture current iteration's file in local scope for the getFile() callback.
 						console.log('got file system');
-						fs.root.getFile(name + ' save', {create: true, exclusive: true}, function(fileEntry) {
+						fs.root.getFile(name + ' save', {create: true, exclusive: false}, function(fileEntry) {
 							console.log('created entry');
 							fileEntry.createWriter(function(fileWriter) {
 								//var dataView = new DataView(chunkarray);
 								var blob = new Blob([chunkarray]);
 								fileWriter.write(blob); // Note: write() can take a File or Blob object.
-								onInitFs(fs);
+								//onInitFs(fs);
+								setTimeout(playFile,1000,fileEntry.toURL());
 								console.log('new file ' + fileEntry.name);
 							}, errorHandler);
 						  
@@ -388,14 +411,46 @@ socket.on('answericecandidate', function (data) {
 });
 	
 	
+socket.on('createdstream', function (data) {
+	console.log(data);	
+	streamid = data.id;
+	document.querySelector("#streamheader").innerHTML = "Stream created: " + streamid;
+	document.querySelector("#myfile").style.display = "block";
+});
+
+function fileExists(fileid)
+{
+	for ( i =0;i<streamfiles.length;i++)
+	{
+		if (streamfiles[i]==fileid)
+		{
+			return true;
+		}
+	}
+	return false;
+}
 	
 socket.on('joinedstream', function (data) {
 	console.log(data);	
+	for ( i =0;i<data.files.length;i++)
+	{
+		if (fileExists(data.files[i]))
+		{
+			console.log ('already have file ' + data.files[i]);
+			continue;
+		}
+		else
+		{
+			getFile(data.files[i]);
+		}
+	}
 });
 
 socket.on('streamfileregistered', function(data){
 	console.log('recieved new file on stream ' + data.streamid);
-	getFile(data.fileid);
+	
+	if (!fileExists(data.fileid))
+		getFile(data.fileid);
 });
 
 	
@@ -404,14 +459,10 @@ if (streamid!='undefined')
 socket.emit('registerstream',{streamid:streamid});
 }
 
-
-
-</script>
-
-<input type="file" id="myfile" multiple /><br>
-
-<ul id="filelist"></ul>
-<script>
+function createStream()
+{
+socket.emit('newstream');
+}
 
 window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 
@@ -451,6 +502,7 @@ function toArray(list) {
 function listResults(entries) {
   // Document fragments can improve performance since they're only appended
   // to the DOM once. Only one browser reflow occurs.
+  /*
   var fragment = document.createDocumentFragment();
 
   entries.forEach(function(entry, i) {
@@ -464,7 +516,7 @@ function listResults(entries) {
   });
 
   document.querySelector('#filelist').innerHTML = "";
-  document.querySelector('#filelist').appendChild(fragment);
+  document.querySelector('#filelist').appendChild(fragment);*/
 }
 
 function onInitFs(fs) {
@@ -496,6 +548,8 @@ function createFile(file,callback)
 	socket.removeAllListeners('filecreated');
 	socket.on('filecreated', function (data) {
 		console.log(data);	
+		streamfiles.push(data.id);
+		socket.emit('attachfile',{streamid:streamid,fileid:data.id})
 		callback(file, data.id);
 		
 	/*TODO: Serve the section of the file to another user
@@ -525,6 +579,8 @@ function createFile(file,callback)
 			  });
 
 			}
+			
+			document.querySelector('#myfile').value="";
   }, errorHandler);
 
 };

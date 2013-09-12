@@ -102,7 +102,7 @@ sio.sockets.on('connection', function (socket) {
 				};
 		
 		//Alert client to successful file registration
-		socket.emit('joinedstream',payload);
+		socket.emit('createdstream',payload);
 		
 		
 		console.log('New stream created ' + newStream.id);
