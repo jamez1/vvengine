@@ -10,6 +10,29 @@ var files = new Array();
 var connects = new Array();
 var streams = new Array();
 
+function setAnswerChannelID(socket,channelid,anschannelid)
+{
+	console.log('assigning ' + anschannelid + ' to ' + socket.id);
+	for (var j =0;j<=connects.length;j++)
+	{
+		if (connects[j]!=null)
+		{
+			if (connects[j].offererchannelid==channelid)
+			{
+				if (connects[j].offerer.id==socket.id || connects[j].answerer.id==socket.id)
+				{
+					connects[j].anschannelid = anschannelid;
+					break;
+				}
+			}
+		}
+	}
+	console.log('no mathcing connection found:');
+	console.log(socket);
+	console.log('to');
+	console.log(connects);
+}
+
 function getAnswerer(socket, channelid)
 {
 	for (var j =0;j<=connects.length;j++)
@@ -23,14 +46,16 @@ function getAnswerer(socket, channelid)
 						socket: connects[j].answerer, 
 						id: connects[j].id,
 						filesize: connects[j].filesize,
-						offererchannelid: connects[j].offererchannelid
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
 					};
 				if (connects[j].answerer.id==socket.id)
 					return { 
 						socket: connects[j].offerer, 
 						id: connects[j].id,
 						filesize: connects[j].filesize,
-						offererchannelid: connects[j].offererchannelid
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
 					};
 			}
 		}
@@ -230,7 +255,9 @@ sio.sockets.on('connection', function (socket) {
 	*/
 	});
 	socket.on('connect', function (data) {
+		setAnswerChannelID(socket,data.channelid,data.answerchannelid);
 		var connection = getAnswerer(socket,data.channelid);
+		
 		var answerer = connection.socket;
 		if (answerer==null)
 		{
@@ -253,7 +280,7 @@ sio.sockets.on('connection', function (socket) {
 			return;
 		}
 		console.log('Passing offer ice candidate ' + answerer.id + ' ' + socket.id);
-		answerer.emit('offericecandidate', {candidate:data.candidate, channelid:connection.offererchannelid});
+		answerer.emit('offericecandidate', {candidate:data.candidate, channelid:connection.anschannelid});
 	});
 	
 	socket.on('answericecandidate', function (data) {

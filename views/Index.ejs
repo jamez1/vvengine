@@ -320,16 +320,19 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 
 
 function createAnswer(offerSDP,id,channelid) {
-    answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
-    answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
+    var answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
+    var answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
         reliable: true
     });
 
+	var anschannelid = connections.length;
+	connections[anschannelid] = {answerer:answerer, answererDataChannel:answererDataChannel};
+	
     setChannelEvents(answererDataChannel, 'answerer');
 
     answerer.onicecandidate = function (event) {
         if (!event || !event.candidate) return;
-		socket.emit('answericecandidate', {id:id, candidate:event.candidate, channelid:channelid});
+		socket.emit('answericecandidate', {id:id, candidate:event.candidate, channelid:channelid, answerchannelid:anschannelid});
         //offerer && offerer.addIceCandidate(event.candidate);
     };
 
@@ -339,7 +342,7 @@ function createAnswer(offerSDP,id,channelid) {
 	
     answerer.createAnswer(function (sessionDescription) {
         answerer.setLocalDescription(sessionDescription);
-		socket.emit('connect', {id:id, sdp:sessionDescription, channelid:channelid});
+		socket.emit('connect', {id:id, sdp:sessionDescription, channelid:channelid, answerchannelid:anschannelid});
     }, null, mediaConstraints);
 }
 
@@ -386,7 +389,7 @@ Recieve an SDP*/
 
 socket.on('offericecandidate', function (data) {
 	console.log(data);	
-    answerer.addIceCandidate(new RTCIceCandidate(data.candidate));
+    connections[data.channelid].answerer.addIceCandidate(new RTCIceCandidate(data.candidate));
 });
 
 
