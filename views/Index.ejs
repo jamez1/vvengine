@@ -370,6 +370,7 @@ function getFile(id)
 
 	setChannelEvents(offererDataChannel, 'offerer');
 	
+	
 	offerer.createOffer(
 		function (sessionDescription) {
 			sessionDescription.sdp = transformOutgoingSdp(sessionDescription.sdp);
@@ -377,6 +378,7 @@ function getFile(id)
 			socket.emit('getchunk', {id:id, sdp:sessionDescription, channelid:channelid});
 		}, 
 		null, mediaConstraints);
+
 }
 socket.on('get', function (data) {
 	console.log(data);	
@@ -397,9 +399,10 @@ socket.on('reply', function (data) {
 	console.log(data);	
 	var sdp = data.sdp;
 	var channelid = data.channelid;
+	var id = data.id;
 	
 	console.log('running events under channel ' + channelid);
-	setDownloaderChannelEvents(connections[channelid].offererDataChannel, 'download' + channelid, data.id,data.filesize, channelid);
+	setDownloaderChannelEvents(connections[channelid].offererDataChannel, 'download' + channelid, id,data.filesize, channelid);
 	
     connections[channelid].offerer.setRemoteDescription(new RTCSessionDescription(sdp));
 /*TODO: Serve the section of the file to another user

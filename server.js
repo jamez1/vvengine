@@ -10,20 +10,49 @@ var files = new Array();
 var connects = new Array();
 var streams = new Array();
 
-function setAnswerChannelID(socket,channelid,anschannelid)
+function getAnswerChannelID(socket)
 {
-	console.log('assigning ' + anschannelid + ' to ' + socket.id);
+	var connections=0;
+	
 	for (var j =0;j<=connects.length;j++)
 	{
 		if (connects[j]!=null)
 		{
-			if (connects[j].offererchannelid==channelid)
+			if (connects[j].offerer.id==socket.id)
+				connections++;
+			if (connects[j].answerer.id==socket.id)
+				connections++;
+		}
+	}
+	
+	return connections;
+}
+
+
+function getOfferer(socket, channelid)
+{
+	for (var j =0;j<=connects.length;j++)
+	{
+		if (connects[j]!=null)
+		{
+			if (connects[j].anschannelid==channelid)
 			{
-				if (connects[j].offerer.id==socket.id || connects[j].answerer.id==socket.id)
-				{
-					connects[j].anschannelid = anschannelid;
-					break;
-				}
+				if(connects[j].offerer.id==socket.id)
+					return { 
+						socket: connects[j].answerer, 
+						id: connects[j].id,
+						filesize: connects[j].filesize,
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
+					};
+				if (connects[j].answerer.id==socket.id)
+					return { 
+						socket: connects[j].offerer, 
+						id: connects[j].id,
+						filesize: connects[j].filesize,
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
+					};
 			}
 		}
 	}
@@ -31,7 +60,10 @@ function setAnswerChannelID(socket,channelid,anschannelid)
 	console.log(socket);
 	console.log('to');
 	console.log(connects);
+	
+	return null;
 }
+
 
 function getAnswerer(socket, channelid)
 {
@@ -237,6 +269,7 @@ sio.sockets.on('connection', function (socket) {
 		}
 		
 		var peer = getPeer(socket,file);
+		var peerConnectionId = getAnswerChannelID(peer);
 		
 		if (peer==-1)
 		{
@@ -245,18 +278,17 @@ sio.sockets.on('connection', function (socket) {
 		}
 		
 		console.log(data);
-		var connect = { offerer:socket, answerer:peer, id:data.id, filesize:file.filesize, offererchannelid:  data.channelid};
+		var connect = { offerer:socket, answerer:peer, id:data.id, filesize:file.filesize, offererchannelid:  data.channelid, anschannelid: peerConnectionId};
 		connects.push(connect);
 		console.log('Connecting peers ' + peer.id + ' ' + socket.id);
 		console.log('Sent SDP ' + data.sdp);
-		peer.emit('get', { id:data.id, sdp:data.sdp, channelid: data.channelid});
+		peer.emit('get', { id:data.id, sdp:data.sdp, channelid: peerConnectionId});
 	/*TODO: Find the user another user who has a file
 	give them the SDP to serve
 	*/
 	});
 	socket.on('connect', function (data) {
-		setAnswerChannelID(socket,data.channelid,data.answerchannelid);
-		var connection = getAnswerer(socket,data.channelid);
+		var connection = getOfferer(socket,data.answerchannelid);
 		
 		var answerer = connection.socket;
 		if (answerer==null)
@@ -284,7 +316,7 @@ sio.sockets.on('connection', function (socket) {
 	});
 	
 	socket.on('answericecandidate', function (data) {
-		var connection = getAnswerer(socket,data.channelid);
+		var connection = getOfferer(socket,data.answerchannelid);
 		console.log(connection);
 		
 		var answerer = connection.socket;
