@@ -1,4 +1,30 @@
 <html>
+<head>
+<style>
+.file
+{
+	width: 130px;
+	height: 170px;
+	padding: 10px;
+	border:1px solid black;
+}
+
+.file .window
+{
+	width: 130px;
+	height: 130px;
+	/* background:red */
+	border: 1px solid black;
+}
+
+.file .progress
+{
+    width: 100px;
+    height: 10px;
+    background: green;
+}
+</style>
+</head>
 <body>
 <a href="#" onclick="createStream();">Create new Stream</a>
 <div id="streamheader"></div>
@@ -11,6 +37,15 @@
 
 <div id="playback">
 <video id="video">
+</div>
+
+<div id="files">
+<!--
+<div class="file">
+  <div class="window"></div>
+  <div class="progress"></div>
+</div>
+-->
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -26,6 +61,11 @@ var total = new Array();
 var start = new Array();
 var end = new Array();
 var expected = new Array();
+
+var chunkarray = new Array();
+
+var downloadQueue = new Array();
+
 
 /*GLOBAL WEBRTC SETTINGS*/
 var iceServers = {
@@ -66,7 +106,24 @@ function playFile(file)
 }
 /*global funcs*/
 
+function addToQueue(file)
+{
+	console.log('added to queue ' + file);
+	downloadQueue.push(file);
+	//getFile(file);
+}
 
+function runQueue()
+{
+	var curFile = downloadQueue.shift();
+	if (curFile==undefined)
+	{
+		console.log('no items left to download');
+		return;
+	}
+	
+	getFile(curFile);
+}
 
 function setChannelEvents(channel, channelNameForConsoleOutput) {
 
@@ -170,7 +227,7 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 			case 'getchunk':
 				var id = obj.id;
 				var length = obj.end - obj.start;
-				
+				console.log ('starting xfr');
 				var onInitFsRead = function (fs) {
 					fs.root.getFile(id, {}, function(fileEntry) {
 						fileEntry.file(function(file) {
@@ -186,7 +243,7 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 								
 								var payload = {type:'fileinfo',start:start, end:end, id:id};
 								channel.send(JSON.stringify(payload));
-								
+								console.log ('file info sent');
 								transfer(start,end,channel,id,b64,increment);
 		
 							};
@@ -223,7 +280,7 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 	end[channelid] = 0;//filesize;
 	total[channelid] = 0;
 	recv[channelid] = "";
-	//var chunkarray;// = new Uint8Array(filesize);
+	chunkarray[channelid];// = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
         //console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
@@ -239,14 +296,8 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 			break;
 			case 'chunk':
 				var name = obj.id;
-				/*var bin = Base64Binary.decodeArrayBuffer(obj.data);
-				var trimmed = bin.slice(0,obj.size);
 				
-				
-				chunkarray.set( new Uint8Array( trimmed ), obj.start);
-				total += obj.size;
-				*/
-				console.log (channelNameForConsoleOutput + ' At:' + total[channelid] + ' End:' + end[channelid]);
+				//console.log (channelNameForConsoleOutput + ' At:' + total[channelid] + ' End:' + end[channelid]);
 				
 				
 				if (total[channelid]+obj.size==end[channelid])
@@ -254,19 +305,27 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
 					console.log('finished, writing file');
-					chunkarray = Base64Binary.decodeArrayBuffer(recv[channelid]);
+					chunkarray[channelid] = Base64Binary.decodeArrayBuffer(recv[channelid]);
+					recv[channelid] = undefined;
+					
 					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
 					  // Capture current iteration's file in local scope for the getFile() callback.
 						console.log('got file system');
 						fs.root.getFile(name + ' save', {create: true, exclusive: false}, function(fileEntry) {
 							console.log('created entry');
 							fileEntry.createWriter(function(fileWriter) {
-								//var dataView = new DataView(chunkarray);
-								var blob = new Blob([chunkarray]);
-								fileWriter.write(blob); // Note: write() can take a File or Blob object.
+							
+								var blob = new Blob([chunkarray[channelid]]);
+								fileWriter.write(blob); 
+								chunkarray[channelid] = undefined; //Destroy once completed
+								
 								//onInitFs(fs);
 								setTimeout(playFile,1000,fileEntry.toURL());
 								console.log('new file ' + fileEntry.name);
+								
+								//Get next file in Queue
+								setTimeout(runQueue,0);
+								
 							}, errorHandler);
 						  
 						}, errorHandler);
@@ -426,9 +485,17 @@ socket.on('createdstream', function (data) {
 
 function fileExists(fileid)
 {
-	for ( i =0;i<streamfiles.length;i++)
+	for (var i =0;i<streamfiles.length;i++)
 	{
 		if (streamfiles[i]==fileid)
+		{
+			return true;
+		}
+	}
+	
+	for (var i =0;i<downloadQueue.length;i++)
+	{
+		if (downloadQueue[i]==fileid)
 		{
 			return true;
 		}
@@ -438,7 +505,7 @@ function fileExists(fileid)
 	
 socket.on('joinedstream', function (data) {
 	console.log(data);	
-	for ( i =0;i<data.files.length;i++)
+	for (var i =0;i<data.files.length;i++)
 	{
 		if (fileExists(data.files[i]))
 		{
@@ -447,16 +514,21 @@ socket.on('joinedstream', function (data) {
 		}
 		else
 		{
-			getFile(data.files[i]);
+			addToQueue(data.files[i]);
 		}
 	}
+	
+	runQueue();
 });
 
 socket.on('streamfileregistered', function(data){
 	console.log('recieved new file on stream ' + data.streamid);
 	
 	if (!fileExists(data.fileid))
-		getFile(data.fileid);
+	{
+		addToQueue(data.fileid);
+		setTimeout(runQueue,0);
+	}
 });
 
 	
@@ -479,15 +551,18 @@ function errorHandler(e) {
 	switch (e.code) {
 		case FileError.QUOTA_EXCEEDED_ERR:
 		msg = 'QUOTA_EXCEEDED_ERR';
+		//Not enough disk space
 		break;
 		case FileError.NOT_FOUND_ERR:
 		msg = 'NOT_FOUND_ERR';
 		break;
 		case FileError.SECURITY_ERR:
 		msg = 'SECURITY_ERR';
+		//Incognito mode perhaps?
 		break;
 		case FileError.INVALID_MODIFICATION_ERR:
 		msg = 'INVALID_MODIFICATION_ERR';
+		//Bad file name
 		break;
 		case FileError.INVALID_STATE_ERR:
 		msg = 'INVALID_STATE_ERR';
