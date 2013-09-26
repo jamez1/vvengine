@@ -74,7 +74,7 @@ var iceServers = {
     }]
 };
 
-var optionalRtpDataChannels = {
+var RtpDataChannelsOptions = {
     optional: [{
         RtpDataChannels: true
     }]
@@ -123,6 +123,39 @@ function runQueue()
 	}
 	
 	getFile(curFile);
+}
+
+function updateProgress(file, prog)
+{
+  var elem = document.querySelector('#progress' + file);
+  
+  var px = 132*prog;
+  elem.setAttribute('style','width:' + px + 'px');
+}
+
+function listFiles(entries) {
+  // Document fragments can improve performance since they're only appended
+  // to the DOM once. Only one browser reflow occurs.
+  
+  var fragment = document.createDocumentFragment();
+
+  entries.forEach(function(entry, i) {
+  
+    var div = document.createElement('div');
+	
+	var divinner = ''; 
+	divinner += '<div class="file">';
+	divinner += '<div class="window"></div>';
+	divinner += '<div id="progress' + entry + '" class="progress"></div>';
+	divinner += '</div>';
+  
+	div.innerHTML=divinner;
+  
+    fragment.appendChild(div);
+  });
+
+  document.querySelector('#files').innerHTML = "";
+  document.querySelector('#files').appendChild(fragment);
 }
 
 function setChannelEvents(channel, channelNameForConsoleOutput) {
@@ -379,7 +412,7 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 
 
 function createAnswer(offerSDP,id,channelid) {
-    var answerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
+    var answerer = new webkitRTCPeerConnection(iceServers, RtpDataChannelsOptions);
     var answererDataChannel = answerer.createDataChannel('RTCDataChannel', {
         reliable: true
     });
@@ -412,7 +445,7 @@ function getFile(id)
 /*New Offerer DataChannel to recieve file down*/
 	var channelid = connections.length;
 	
-	var offerer = new webkitRTCPeerConnection(iceServers, optionalRtpDataChannels);
+	var offerer = new webkitRTCPeerConnection(iceServers, RtpDataChannelsOptions);
 	
 	var offererDataChannel = offerer.createDataChannel('RTCDataChannel', {
 		reliable: true
