@@ -19,33 +19,42 @@
 
 .file .progress
 {
-    width: 100px;
+    width: 0px;
     height: 10px;
     background: green;
+}
+
+#filelist
+{
+	float:right;
+	
 }
 </style>
 </head>
 <body>
-<a href="#" onclick="createStream();">Create new Stream</a>
-<div id="streamheader"></div>
+<div style="float:left;">
+	<a href="#" onclick="createStream();">
+		Create new Stream
+	</a>
+	<div id="streamheader">
+	</div>
 
-<div id="files">
-<input type="file" id="myfile" multiple /><br>
+	<div id="files">
+		<input type="file" id="myfile" multiple /><br>
+	</div>
 
-<ul id="filelist"></ul>
+	<div id="playback">
+		<video id="video">
+	</div>
+
 </div>
-
-<div id="playback">
-<video id="video">
-</div>
-
-<div id="files">
-<!--
-<div class="file">
-  <div class="window"></div>
-  <div class="progress"></div>
-</div>
--->
+<div id="filelist">
+	<!--
+	<div class="file">
+	  <div class="window"></div>
+	  <div class="progress"></div>
+	</div>
+	-->
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -154,8 +163,8 @@ function listFiles(entries) {
     fragment.appendChild(div);
   });
 
-  document.querySelector('#files').innerHTML = "";
-  document.querySelector('#files').appendChild(fragment);
+  document.querySelector('#filelist').innerHTML = "";
+  document.querySelector('#filelist').appendChild(fragment);
 }
 
 function setChannelEvents(channel, channelNameForConsoleOutput) {
@@ -313,7 +322,8 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 	end[channelid] = 0;//filesize;
 	total[channelid] = 0;
 	recv[channelid] = "";
-	chunkarray[channelid];// = new Uint8Array(filesize);
+	//chunkarray[channelid] = new Uint8Array(filesize);
+	chunkarray = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
         //console.debug(channelNameForConsoleOutput, 'received a message:', event.data);
@@ -338,8 +348,9 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
 					console.log('finished, writing file');
-					chunkarray[channelid] = Base64Binary.decodeArrayBuffer(recv[channelid]);
-					recv[channelid] = undefined;
+					//chunkarray[channelid] = Base64Binary.decodeArrayBuffer(recv[channelid]);
+					chunkarray = Base64Binary.decodeArrayBuffer(recv[channelid]);
+					//recv[channelid] = undefined;
 					
 					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
 					  // Capture current iteration's file in local scope for the getFile() callback.
@@ -348,9 +359,10 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 							console.log('created entry');
 							fileEntry.createWriter(function(fileWriter) {
 							
-								var blob = new Blob([chunkarray[channelid]]);
+								//var blob = new Blob([chunkarray[channelid]]);
+								var blob = new Blob([chunkarray]);
 								fileWriter.write(blob); 
-								chunkarray[channelid] = undefined; //Destroy once completed
+								//chunkarray[channelid] = undefined; //Destroy once completed
 								
 								//onInitFs(fs);
 								setTimeout(playFile,1000,fileEntry.toURL());
@@ -388,6 +400,8 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 				{
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
+					var progress = total[channelid]/end[channelid];
+					updateProgress(name,progress);
 				}
 			
 			break;
@@ -548,9 +562,11 @@ socket.on('joinedstream', function (data) {
 		else
 		{
 			addToQueue(data.files[i]);
+			streamfiles.push(data.files[i]);
 		}
 	}
 	
+	listFiles(streamfiles);
 	runQueue();
 });
 
@@ -560,6 +576,13 @@ socket.on('streamfileregistered', function(data){
 	if (!fileExists(data.fileid))
 	{
 		addToQueue(data.fileid);
+		streamfiles.push(data.fileid);
+	}
+	
+	listFiles(streamfiles);
+	
+	if (!fileExists(data.fileid))
+	{
 		setTimeout(runQueue,0);
 	}
 });
@@ -662,10 +685,9 @@ function createFile(file,callback)
 	socket.removeAllListeners('filecreated');
 	socket.on('filecreated', function (data) {
 		console.log(data);	
-		streamfiles.push(data.id);
 		socket.emit('attachfile',{streamid:streamid,fileid:data.id})
+		streamfiles.push(data.id);
 		callback(file, data.id);
-		
 	/*TODO: Serve the section of the file to another user
 	Recieve an SDP*/
 	});

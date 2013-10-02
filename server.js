@@ -212,7 +212,7 @@ sio.sockets.on('connection', function (socket) {
 				};
 		
 		socket.emit('joinedstream',payload);
-		console.log('New user registered on stream ' + data.id);
+		console.log('New user registered on stream ' + stream.id);
 	/*TODO: Register the user for a given file*/
 	});
 	
