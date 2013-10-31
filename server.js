@@ -144,7 +144,7 @@ sio.sockets.on('connection', function (socket) {
 	socket.on('newstream', function (data) {
 		//Create file
 		var newStream = {
-			id: util.guid(),
+			id: util.token(),
 			files: new Array(),
 			users: new Array()
 			};

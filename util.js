@@ -8,3 +8,7 @@ exports.guid = function () {
   return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
          s4() + '-' + s4() + s4() + s4();
 }
+
+exports.token = function () {
+  return Math.random().toString(36).slice(2);
+}

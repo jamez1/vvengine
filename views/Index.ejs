@@ -73,8 +73,121 @@
 	-->
 </div>
 
+
+  <script id="webworker" type="javascript/worker">
+
+    self.onmessage = function(e) {
+	//console.log(obj);
+	var obj = e.data;
+	debugger;
+		switch (obj.type)
+		{
+		case "filetransmit":
+			var result = Base64Binary.encode(obj.buffer);
+			
+			self.postMessage({
+					type:"fileupload", 
+					buffer:result, 
+					start:obj.start,
+					id: obj.id,
+					channelid: obj.channelid
+				});
+				
+			break;
+		case "filerecieve":
+			var result = Base64Binary.decodeArrayBuffer(obj.buffer);
+			
+			self.postMessage({
+					type:"filedownload", 
+					buffer:result, 
+					id: obj.id
+				},[result]);
+			break;
+		
+		default:
+			self.postMessage('no matching action recvd ' + obj.type);
+			break;
+		}
+      //self.postMessage('test');
+    };
+	
+	
+	
+/**Base64 function set**/
+	
+
+
+Base64Binary = {
+	_keyStr : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+
+	/* will return a  Uint8Array type */
+	decodeArrayBuffer: function(input) {
+		var bytes = (input.length/4) * 3;
+		var ab = new ArrayBuffer(bytes);
+		this.decode(input, ab);
+
+		return ab;
+	},
+
+	decode: function(input, arrayBuffer) {
+		//get last chars to see if are valid
+		var lkey1 = this._keyStr.indexOf(input.charAt(input.length-1));		 
+		var lkey2 = this._keyStr.indexOf(input.charAt(input.length-2));		 
+
+		var bytes = (input.length/4) * 3;
+		if (lkey1 == 64) bytes--; //padding chars, so skip
+		if (lkey2 == 64) bytes--; //padding chars, so skip
+
+		var uarray;
+		var chr1, chr2, chr3;
+		var enc1, enc2, enc3, enc4;
+		var i = 0;
+		var j = 0;
+
+		if (arrayBuffer)
+			uarray = new Uint8Array(arrayBuffer);
+		else
+			uarray = new Uint8Array(bytes);
+
+		input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+
+		for (i=0; i<bytes; i+=3) {	
+			//get the 3 octects in 4 ascii chars
+			enc1 = this._keyStr.indexOf(input.charAt(j++));
+			enc2 = this._keyStr.indexOf(input.charAt(j++));
+			enc3 = this._keyStr.indexOf(input.charAt(j++));
+			enc4 = this._keyStr.indexOf(input.charAt(j++));
+
+			chr1 = (enc1 << 2) | (enc2 >> 4);
+			chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+			chr3 = ((enc3 & 3) << 6) | enc4;
+
+			uarray[i] = chr1;			
+			if (enc3 != 64) uarray[i+1] = chr2;
+			if (enc4 != 64) uarray[i+2] = chr3;
+		}
+
+		return uarray;	
+	},
+	
+	encode: function( buffer ) {
+		var binary = ''
+		var bytes = new Uint8Array( buffer )
+		var len = bytes.byteLength;
+		for (var i = 0; i < len; i++) {
+			binary += String.fromCharCode( bytes[ i ] )
+		}
+		return btoa( binary );
+	}
+  
+}
+  </script>
+  
+
 <script src="/socket.io/socket.io.js"></script>
 <script>
+var blob = new Blob([document.querySelector('#webworker').textContent]);
+var worker = new Worker(window.URL.createObjectURL(blob));
 
 /**Prepare connection**/
 var streamid = '<%= id%>';
@@ -94,6 +207,8 @@ var downloadQueue = new Array();
 var a = document.querySelector('#video');
 
 /*GLOBAL WEBRTC SETTINGS*/
+var increment = 1000; //file tfr block increments
+
 var iceServers = {
     iceServers: [{
         url: 'stun:stun.l.google.com:19302'
@@ -125,24 +240,111 @@ function transformOutgoingSdp(sdp) {
 }
 
 
+
+/*WebWorker communication*/
+worker.onmessage = function(e) {
+	var obj = e.data;
+
+  switch (obj.type)
+  {
+	case "fileupload":
+		var b64 = obj.buffer
+		var start = obj.start;
+		var end = b64.length;
+		var channel = connections[obj.channelid].answererDataChannel;
+		var payload = {type:'fileinfo',start:start, end:end, id:obj.id};
+		
+		channel.send(JSON.stringify(payload));
+		console.log ('file info sent');
+		
+		channel.transfer(start,end,channel,obj.id,b64,increment);
+		break;
+		
+	case "filedownload":		
+		window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
+		  // Capture current iteration's file in local scope for the getFile() callback.
+			console.log('got file system');
+			fs.root.getFile(obj.id + ' save', {create: true, exclusive: false}, function(fileEntry) {
+				console.log('created entry');
+				fileEntry.createWriter(function(fileWriter) {
+				
+					fileWriter.onwriteend = function(e) {
+						console.log('new file ' + fileEntry.name);
+						socket.emit('register', {id:obj.id});
+						
+						//Get next file in Queue
+						setTimeout(addToPlayQueue,0,fileEntry.toURL());
+						setTimeout(runQueue,0);
+						
+						//Create thumbnail
+						setTimeout(snapShot,0,obj.id,fileEntry.toURL());
+					};
+					
+					var blob = new Blob([obj.buffer]);
+					fileWriter.write(blob); 
+					
+				}, errorHandler);
+			  
+			}, errorHandler);
+				
+		}, errorHandler);
+		break;
+  }
+}
+
+function workerRecvFile(buffer,id)
+{
+	worker.postMessage({
+		type: "filerecieve",
+		buffer: buffer,
+		id: id
+		}); // Start the worker.
+}
+
+function workerSendFile(channelid,id,start,buffer)
+{
+	worker.postMessage({
+		type: "filetransmit",
+		buffer: buffer,
+		id: id,
+		start:start,
+		channelid:channelid
+		},[buffer]); // Start the worker.
+}
+/*End WW*/
+
+
+
+/**Begin snapshot code**/
 canvas = document.createElement('canvas');
 canvas.width = 130;
 canvas.height = 130;
 
 ctx = canvas.getContext('2d');
-videoTemp = document.createElement('video');
 
 function snapShot(file,url)
 {
-	videoTemp.setAttribute("src",url);
-	setTimeout(function()
-	{
-		ctx.drawImage(videoTemp, 0, 0, canvas.width, canvas.height);
-		var display = document.querySelectorAll("#file" + file + " .window")[0];
-		display.setAttribute("style", "background-image:url('" + canvas.toDataURL('image/jpeg') + "')");
-		console.log('snapshot taken');
-	},1000);
+	console.log('start snapshot');
+	var videoTemp = document.createElement('video');
+	videoTemp.src = url;
+	videoTemp.addEventListener(
+			'loadeddata',
+			function()
+			{
+				ctx.drawImage(videoTemp, 0, 0, canvas.width, canvas.height);
+				var display = document.querySelectorAll("#file" + file + " .window")[0];
+				display.setAttribute("style", "background-image:url('" + canvas.toDataURL('image/jpeg') + "')");
+				console.log('snapshot taken');
+				videoTemp.remove();
+			},
+			false
+		);
+	videoTemp.load();
 }
+
+/**End snapshot code**/
+
+/**Begin playlist code**/
 
 var playlist = new Array();
 var currentPlayFile = -1;
@@ -164,6 +366,7 @@ function videoEnded() {
 
 function playItem(i)
 {
+	console.log('playing item ' + i);
 	var item = document.querySelectorAll('.file')[currentPlayFile];
 	if (item!=undefined)
 	{
@@ -172,6 +375,7 @@ function playItem(i)
 	}
 	
 	a.setAttribute('src', playlist[i]);
+	a.load();
 	a.play();
 	currentPlayFile = i;
 	
@@ -183,11 +387,13 @@ function playItem(i)
 function addToPlayQueue(file)
 {
 	playlist.push(file);
-	if (a.paused)
+	if (a.ended || a.readyState==0)
 	{
 		playItem(currentPlayFile+1);
 	}
 }
+
+/**end playlist code**/
 /*global funcs*/
 
 function addToQueue(file)
@@ -245,10 +451,9 @@ function listFiles(entries) {
   document.querySelector('#filelist').appendChild(fragment);
 }
 
-function setChannelEvents(channel, channelNameForConsoleOutput) {
+function setChannelEvents(channel, channelNameForConsoleOutput, channelid) {
 
 	var s = -1;
-	var increment = 1000;
 	/*
 	var transfer = function (start,end, channel, id,src,increment)
 	{
@@ -338,7 +543,7 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 */
 	/*** setTimeout w/multi implementation - very slow 10-20kb/s when in chrome inactive window*/
 	
-	function transfer(start,end, channel, id,src,increment)
+	channel.transfer = function transfer(start,end, channel, id,src,increment)
 	{
 		var sent = 0;
 		
@@ -349,7 +554,7 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 			s=-1;
 		}
 
-		for (var i = 0;i<30;i++)
+		for (var i = 0;i<20;i++)
 		{
 			var from = start + (i*increment);
 			var to = start + ((i + 1)*increment);
@@ -402,8 +607,9 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 							reader.onloadend = function(e) {
 								//debugger;
 								var src = this.result;
+								workerSendFile(channelid,id,obj.start,src);
+							 /***james20131031 Now to be replaced with webworkers (base64 conversion briefly freezes video)
 								var b64 = _arrayBufferToBase64(src);
-							 
 								var start = obj.start;
 								var end = b64.length;
 								
@@ -411,7 +617,8 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 								channel.send(JSON.stringify(payload));
 								console.log ('file info sent');
 								transfer(start,end,channel,id,b64,increment);
-		
+							*/
+								
 							};
 
 							reader.readAsArrayBuffer(file);
@@ -446,7 +653,6 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 	end[channelid] = 0;//filesize;
 	total[channelid] = 0;
 	recv[channelid] = "";
-	//chunkarray[channelid] = new Uint8Array(filesize);
 	chunkarray = new Uint8Array(filesize);
 
     channel.onmessage = function (event) {
@@ -472,36 +678,10 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
 					console.log('finished, writing file');
-					//chunkarray[channelid] = Base64Binary.decodeArrayBuffer(recv[channelid]);
-					chunkarray = Base64Binary.decodeArrayBuffer(recv[channelid]);
-					//recv[channelid] = undefined;
 					
-					window.requestFileSystem(window.TEMPORARY, 1024*1024, function(fs) {
-					  // Capture current iteration's file in local scope for the getFile() callback.
-						console.log('got file system');
-						fs.root.getFile(name + ' save', {create: true, exclusive: false}, function(fileEntry) {
-							console.log('created entry');
-							fileEntry.createWriter(function(fileWriter) {
-							
-								//var blob = new Blob([chunkarray[channelid]]);
-								var blob = new Blob([chunkarray]);
-								fileWriter.write(blob); 
-								//chunkarray[channelid] = undefined; //Destroy once completed
-								
-								//onInitFs(fs);
-								setTimeout(addToPlayQueue,0,fileEntry.toURL());
-								console.log('new file ' + fileEntry.name);
-								socket.emit('register', {id:obj.id});
-								//Get next file in Queue
-								setTimeout(runQueue,0);
-								
-								setTimeout(snapShot,0,obj.id,fileEntry.toURL());
-								
-							}, errorHandler);
-						  
-						}, errorHandler);
-							
-					}, errorHandler);
+					//Offload processing to the worker
+					workerRecvFile(recv[channelid], obj.id);
+					
 				}
 				else if (obj.start> total[channelid] )
 				{
@@ -526,13 +706,8 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 				{
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
-					try{
 					var progress = total[channelid]/end[channelid];
 					updateProgress(name,progress);
-					}catch(err)
-					{
-					debugger;
-					}
 				}
 			
 			break;
@@ -546,7 +721,7 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 		var payload = {
 			type:'getchunk',
 			start:start[channelid],
-			end: filesize,//end[channelid],
+			end: filesize,
 			id:id
 		};
 		
@@ -565,7 +740,7 @@ function createAnswer(offerSDP,id,channelid) {
 	var anschannelid = connections.length;
 	connections[anschannelid] = {answerer:answerer, answererDataChannel:answererDataChannel};
 	
-    setChannelEvents(answererDataChannel, 'answerer');
+    setChannelEvents(answererDataChannel, 'answerer', anschannelid);
 
     answerer.onicecandidate = function (event) {
         if (!event || !event.candidate) return;
@@ -587,7 +762,7 @@ var socket = io.connect('http://localhost:3000/');
 
 function getFile(id)
 {
-/*New Offerer DataChannel to recieve file down*/
+/*New Offerer DataChannel to receive file down*/
 	var channelid = connections.length;
 	
 	var offerer = new webkitRTCPeerConnection(iceServers, RtpDataChannelsOptions);
@@ -602,7 +777,7 @@ function getFile(id)
 	};
 	
 	connections[channelid] = {offerer:offerer, offererDataChannel:offererDataChannel};
-/*New Offerer DataChannel to recieve file down*/
+/*New Offerer DataChannel to receive file down*/
 
 
 	setChannelEvents(offererDataChannel, 'offerer');
@@ -716,6 +891,8 @@ socket.on('streamfileregistered', function(data){
 	else
 	{
 		listFiles(streamfiles);
+		
+		snapShot(data.fileid)
 	}
 });
 
@@ -765,27 +942,6 @@ function errorHandler(e) {
 	
 function toArray(list) {
 	return Array.prototype.slice.call(list || [], 0);
-}
-
-/*Begin dir listing*/
-function listResults(entries) {
-  // Document fragments can improve performance since they're only appended
-  // to the DOM once. Only one browser reflow occurs.
-  /*
-  var fragment = document.createDocumentFragment();
-
-  entries.forEach(function(entry, i) {
-    var img = entry.isDirectory ? '<img src="folder-icon.gif">' :
-                                  '<img src="file-icon.gif">';
-    var li = document.createElement('li');
-	var startanchor = '<a href="' + entry.toURL() + '">';
-	var endanchor = '</a>';
-    li.innerHTML = [img, '<span>', startanchor, entry.name, endanchor,'</span>'].join('');
-    fragment.appendChild(li);
-  });
-
-  document.querySelector('#filelist').innerHTML = "";
-  document.querySelector('#filelist').appendChild(fragment);*/
 }
 
 function onInitFs(fs) {
@@ -845,7 +1001,7 @@ socket.on('filecreated', function (data) {
 				fs.root.getFile(name, {create: true, exclusive: true}, function(fileEntry) {
 				
 				  fileEntry.createWriter(function(fileWriter) {
-					fileWriter.write(f); // Note: write() can take a File or Blob object.
+					fileWriter.write(f); 
 					onInitFs(fs);
 				  }, errorHandler);
 				  
@@ -859,71 +1015,6 @@ socket.on('filecreated', function (data) {
 
 };
 
-/**Base64 code**/
-	
-function _arrayBufferToBase64( buffer ) {
-    var binary = ''
-    var bytes = new Uint8Array( buffer )
-    var len = bytes.byteLength;
-    for (var i = 0; i < len; i++) {
-        binary += String.fromCharCode( bytes[ i ] )
-    }
-    return window.btoa( binary );
-}
-
-Base64Binary = {
-	_keyStr : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
-
-	/* will return a  Uint8Array type */
-	decodeArrayBuffer: function(input) {
-		var bytes = (input.length/4) * 3;
-		var ab = new ArrayBuffer(bytes);
-		this.decode(input, ab);
-
-		return ab;
-	},
-
-	decode: function(input, arrayBuffer) {
-		//get last chars to see if are valid
-		var lkey1 = this._keyStr.indexOf(input.charAt(input.length-1));		 
-		var lkey2 = this._keyStr.indexOf(input.charAt(input.length-2));		 
-
-		var bytes = (input.length/4) * 3;
-		if (lkey1 == 64) bytes--; //padding chars, so skip
-		if (lkey2 == 64) bytes--; //padding chars, so skip
-
-		var uarray;
-		var chr1, chr2, chr3;
-		var enc1, enc2, enc3, enc4;
-		var i = 0;
-		var j = 0;
-
-		if (arrayBuffer)
-			uarray = new Uint8Array(arrayBuffer);
-		else
-			uarray = new Uint8Array(bytes);
-
-		input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
-
-		for (i=0; i<bytes; i+=3) {	
-			//get the 3 octects in 4 ascii chars
-			enc1 = this._keyStr.indexOf(input.charAt(j++));
-			enc2 = this._keyStr.indexOf(input.charAt(j++));
-			enc3 = this._keyStr.indexOf(input.charAt(j++));
-			enc4 = this._keyStr.indexOf(input.charAt(j++));
-
-			chr1 = (enc1 << 2) | (enc2 >> 4);
-			chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-			chr3 = ((enc3 & 3) << 6) | enc4;
-
-			uarray[i] = chr1;			
-			if (enc3 != 64) uarray[i+1] = chr2;
-			if (enc4 != 64) uarray[i+2] = chr3;
-		}
-
-		return uarray;	
-	}
-}
 /***/
 
 /*** Quota measure code 
