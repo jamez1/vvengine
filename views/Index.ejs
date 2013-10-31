@@ -24,10 +24,26 @@
     background: green;
 }
 
+.file.stoppedat
+{
+	background:darkseagreen;
+}
+
+.file.playing
+{
+	background:chartreuse;
+}
+
 #filelist
 {
 	float:right;
 	
+}
+
+#video
+{
+	width:640px;
+	height:480px;
 }
 </style>
 </head>
@@ -75,6 +91,7 @@ var chunkarray = new Array();
 
 var downloadQueue = new Array();
 
+var a = document.querySelector('#video');
 
 /*GLOBAL WEBRTC SETTINGS*/
 var iceServers = {
@@ -107,11 +124,69 @@ function transformOutgoingSdp(sdp) {
 	return newSDP;
 }
 
-function playFile(file)
+
+canvas = document.createElement('canvas');
+canvas.width = 130;
+canvas.height = 130;
+
+ctx = canvas.getContext('2d');
+videoTemp = document.createElement('video');
+
+function snapShot(file,url)
 {
-	var a = document.querySelector('#video');
-	a.setAttribute('src', file);
+	videoTemp.setAttribute("src",url);
+	setTimeout(function()
+	{
+		ctx.drawImage(videoTemp, 0, 0, canvas.width, canvas.height);
+		var display = document.querySelectorAll("#file" + file + " .window")[0];
+		display.setAttribute("style", "background-image:url('" + canvas.toDataURL('image/jpeg') + "')");
+		console.log('snapshot taken');
+	},1000);
+}
+
+var playlist = new Array();
+var currentPlayFile = -1;
+
+a.addEventListener('ended',videoEnded,false);
+
+function videoEnded() {
+	if (playlist.length>(currentPlayFile + 1))
+	{
+		playItem(currentPlayFile+1);
+	}
+	else
+	{
+		var item = document.querySelectorAll('.file')[currentPlayFile];
+		item.classList.remove("playing");
+		item.classList.add("stoppedat");
+	}
+}
+
+function playItem(i)
+{
+	var item = document.querySelectorAll('.file')[currentPlayFile];
+	if (item!=undefined)
+	{
+		item.classList.remove("playing");
+		item.classList.remove("stoppedat");
+	}
+	
+	a.setAttribute('src', playlist[i]);
 	a.play();
+	currentPlayFile = i;
+	
+	var item = document.querySelectorAll('.file')[currentPlayFile];
+	item.classList.add("playing");
+	item.classList.remove("stoppedat");
+}
+
+function addToPlayQueue(file)
+{
+	playlist.push(file);
+	if (a.paused)
+	{
+		playItem(currentPlayFile+1);
+	}
 }
 /*global funcs*/
 
@@ -149,11 +224,14 @@ function listFiles(entries) {
   var fragment = document.createDocumentFragment();
 
   entries.forEach(function(entry, i) {
-  
+	
+	if (document.querySelectorAll("#file" + entry).length!=0)
+		return;
+		
     var div = document.createElement('div');
 	
 	var divinner = ''; 
-	divinner += '<div class="file">';
+	divinner += '<div class="file" id="file' + entry + '">';
 	divinner += '<div class="window"></div>';
 	divinner += '<div id="progress' + entry + '" class="progress"></div>';
 	divinner += '</div>';
@@ -163,7 +241,7 @@ function listFiles(entries) {
     fragment.appendChild(div);
   });
 
-  document.querySelector('#filelist').innerHTML = "";
+  //document.querySelector('#filelist').innerHTML = "";
   document.querySelector('#filelist').appendChild(fragment);
 }
 
@@ -229,6 +307,7 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 */
 
 	/*** setTimeout implementation - very slow 1-2kb/s when in chrome inactive window*/
+	/*
 	function transfer(start,end, channel, id,src,increment)
 	{
 		if (s!=-1)
@@ -256,7 +335,49 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 		}
 		
 	}
+*/
+	/*** setTimeout w/multi implementation - very slow 10-20kb/s when in chrome inactive window*/
+	
+	function transfer(start,end, channel, id,src,increment)
+	{
+		var sent = 0;
+		
+		if (s!=-1)
+		{
+			console.log ('resettting start from ' + start + ' to ' + s);
+			start = s;
+			s=-1;
+		}
 
+		for (var i = 0;i<30;i++)
+		{
+			var from = start + (i*increment);
+			var to = start + ((i + 1)*increment);
+			var srcCut = src.slice(from,to);
+						
+			var payload = {type:'chunk',data:srcCut, start:from, size:srcCut.length, id:id};
+			//console.log(payload);
+			channel.send(JSON.stringify(payload));
+			
+			sent += increment;
+			
+			if (start + sent >= end)
+				return;
+		}
+		
+		if (start + sent < end)
+			setTimeout(transfer, 0,start + sent , end, channel, id, src, increment);
+		/*
+		else
+		{
+			var srcCut = src.slice(start,end);
+					
+			var payload = {type:'chunk',data:srcCut, start:start, size:srcCut.length, id:id};
+				
+			channel.send(JSON.stringify(payload));
+		}*/
+		
+	}
 
 
     channel.onmessage = function (event) {
@@ -270,13 +391,16 @@ function setChannelEvents(channel, channelNameForConsoleOutput) {
 				var id = obj.id;
 				var length = obj.end - obj.start;
 				console.log ('starting xfr');
+				//debugger;
 				var onInitFsRead = function (fs) {
 					fs.root.getFile(id, {}, function(fileEntry) {
 						fileEntry.file(function(file) {
+				//debugger;
 						
 							var reader = new FileReader();
 
 							reader.onloadend = function(e) {
+								//debugger;
 								var src = this.result;
 								var b64 = _arrayBufferToBase64(src);
 							 
@@ -365,11 +489,13 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 								//chunkarray[channelid] = undefined; //Destroy once completed
 								
 								//onInitFs(fs);
-								setTimeout(playFile,1000,fileEntry.toURL());
+								setTimeout(addToPlayQueue,0,fileEntry.toURL());
 								console.log('new file ' + fileEntry.name);
-								
+								socket.emit('register', {id:obj.id});
 								//Get next file in Queue
 								setTimeout(runQueue,0);
+								
+								setTimeout(snapShot,0,obj.id,fileEntry.toURL());
 								
 							}, errorHandler);
 						  
@@ -400,8 +526,13 @@ function setDownloaderChannelEvents(channel, channelNameForConsoleOutput, id, fi
 				{
 					recv[channelid] += obj.data;
 					total[channelid] += obj.size;
+					try{
 					var progress = total[channelid]/end[channelid];
 					updateProgress(name,progress);
+					}catch(err)
+					{
+					debugger;
+					}
 				}
 			
 			break;
@@ -577,13 +708,14 @@ socket.on('streamfileregistered', function(data){
 	{
 		addToQueue(data.fileid);
 		streamfiles.push(data.fileid);
-	}
-	
-	listFiles(streamfiles);
-	
-	if (!fileExists(data.fileid))
-	{
+		
+		listFiles(streamfiles);
+		
 		setTimeout(runQueue,0);
+	}
+	else
+	{
+		listFiles(streamfiles);
 	}
 });
 
@@ -679,19 +811,25 @@ function onInitFs(fs) {
 /*End dir listing*/
 
 
+var filesToBeCreated = new Array();
+
 function createFile(file,callback)
 {
 	socket.emit('newfile', { size:file.size });
-	socket.removeAllListeners('filecreated');
-	socket.on('filecreated', function (data) {
-		console.log(data);	
-		socket.emit('attachfile',{streamid:streamid,fileid:data.id})
-		streamfiles.push(data.id);
-		callback(file, data.id);
-	/*TODO: Serve the section of the file to another user
-	Recieve an SDP*/
-	});
+	filesToBeCreated.push({file:file,callback:callback});
 }
+socket.on('filecreated', function (data) {
+	console.log(data);	
+	socket.emit('attachfile',{streamid:streamid,fileid:data.id})
+	streamfiles.push(data.id);
+	if (filesToBeCreated.length==0)
+	{
+		console.log("Error no files to be created");
+	}
+	var cb = filesToBeCreated.pop();
+	cb.callback(cb.file, data.id);
+});
+
 
 	window.requestFileSystem(window.TEMPORARY, 1024*1024, onInitFs, errorHandler);
 	

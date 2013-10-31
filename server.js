@@ -117,8 +117,9 @@ function getPeer(socket,file)
 	for (var j =0;j<=file.users.length;j++)
 	{
 		if (file.users[j]!=null)
-			if(file.users[j].id!=socket.id)
-				return file.users[j];
+			if (!file.users[j].disconnected)
+				if(file.users[j].id!=socket.id)
+					return file.users[j];
 	}
 	return -1;
 }
