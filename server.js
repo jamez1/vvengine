@@ -10,6 +10,61 @@ var files = new Array();
 var connects = new Array();
 var streams = new Array();
 
+function getAnswerChannelID(socket)
+{
+	var connections=0;
+	
+	for (var j =0;j<=connects.length;j++)
+	{
+		if (connects[j]!=null)
+		{
+			if (connects[j].offerer.id==socket.id)
+				connections++;
+			if (connects[j].answerer.id==socket.id)
+				connections++;
+		}
+	}
+	
+	return connections;
+}
+
+
+function getOfferer(socket, channelid)
+{
+	for (var j =0;j<=connects.length;j++)
+	{
+		if (connects[j]!=null)
+		{
+			if (connects[j].anschannelid==channelid)
+			{
+				if(connects[j].offerer.id==socket.id)
+					return { 
+						socket: connects[j].answerer, 
+						id: connects[j].id,
+						filesize: connects[j].filesize,
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
+					};
+				if (connects[j].answerer.id==socket.id)
+					return { 
+						socket: connects[j].offerer, 
+						id: connects[j].id,
+						filesize: connects[j].filesize,
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
+					};
+			}
+		}
+	}
+	console.log('no mathcing connection found:');
+	console.log(socket);
+	console.log('to');
+	console.log(connects);
+	
+	return null;
+}
+
+
 function getAnswerer(socket, channelid)
 {
 	for (var j =0;j<=connects.length;j++)
@@ -23,14 +78,16 @@ function getAnswerer(socket, channelid)
 						socket: connects[j].answerer, 
 						id: connects[j].id,
 						filesize: connects[j].filesize,
-						offererchannelid: connects[j].offererchannelid
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
 					};
 				if (connects[j].answerer.id==socket.id)
 					return { 
 						socket: connects[j].offerer, 
 						id: connects[j].id,
 						filesize: connects[j].filesize,
-						offererchannelid: connects[j].offererchannelid
+						offererchannelid: connects[j].offererchannelid,
+						anschannelid: connects[j].anschannelid
 					};
 			}
 		}
@@ -60,8 +117,9 @@ function getPeer(socket,file)
 	for (var j =0;j<=file.users.length;j++)
 	{
 		if (file.users[j]!=null)
-			if(file.users[j].id!=socket.id)
-				return file.users[j];
+			if (!file.users[j].disconnected)
+				if(file.users[j].id!=socket.id)
+					return file.users[j];
 	}
 	return -1;
 }
@@ -86,7 +144,7 @@ sio.sockets.on('connection', function (socket) {
 	socket.on('newstream', function (data) {
 		//Create file
 		var newStream = {
-			id: util.guid(),
+			id: util.token(),
 			files: new Array(),
 			users: new Array()
 			};
@@ -102,7 +160,7 @@ sio.sockets.on('connection', function (socket) {
 				};
 		
 		//Alert client to successful file registration
-		socket.emit('joinedstream',payload);
+		socket.emit('createdstream',payload);
 		
 		
 		console.log('New stream created ' + newStream.id);
@@ -155,7 +213,7 @@ sio.sockets.on('connection', function (socket) {
 				};
 		
 		socket.emit('joinedstream',payload);
-		console.log('New user registered on stream ' + data.id);
+		console.log('New user registered on stream ' + stream.id);
 	/*TODO: Register the user for a given file*/
 	});
 	
@@ -212,6 +270,7 @@ sio.sockets.on('connection', function (socket) {
 		}
 		
 		var peer = getPeer(socket,file);
+		var peerConnectionId = getAnswerChannelID(peer);
 		
 		if (peer==-1)
 		{
@@ -220,17 +279,18 @@ sio.sockets.on('connection', function (socket) {
 		}
 		
 		console.log(data);
-		var connect = { offerer:socket, answerer:peer, id:data.id, filesize:file.filesize, offererchannelid:  data.channelid};
+		var connect = { offerer:socket, answerer:peer, id:data.id, filesize:file.filesize, offererchannelid:  data.channelid, anschannelid: peerConnectionId};
 		connects.push(connect);
 		console.log('Connecting peers ' + peer.id + ' ' + socket.id);
 		console.log('Sent SDP ' + data.sdp);
-		peer.emit('get', { id:data.id, sdp:data.sdp, channelid: data.channelid});
+		peer.emit('get', { id:data.id, sdp:data.sdp, channelid: peerConnectionId});
 	/*TODO: Find the user another user who has a file
 	give them the SDP to serve
 	*/
 	});
 	socket.on('connect', function (data) {
-		var connection = getAnswerer(socket,data.channelid);
+		var connection = getOfferer(socket,data.answerchannelid);
+		
 		var answerer = connection.socket;
 		if (answerer==null)
 		{
@@ -253,11 +313,11 @@ sio.sockets.on('connection', function (socket) {
 			return;
 		}
 		console.log('Passing offer ice candidate ' + answerer.id + ' ' + socket.id);
-		answerer.emit('offericecandidate', {candidate:data.candidate, channelid:connection.offererchannelid});
+		answerer.emit('offericecandidate', {candidate:data.candidate, channelid:connection.anschannelid});
 	});
 	
 	socket.on('answericecandidate', function (data) {
-		var connection = getAnswerer(socket,data.channelid);
+		var connection = getOfferer(socket,data.answerchannelid);
 		console.log(connection);
 		
 		var answerer = connection.socket;
